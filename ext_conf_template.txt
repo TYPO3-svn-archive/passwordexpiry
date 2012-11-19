@@ -1,0 +1,5 @@
+# cat=basic/enable; type=input; label=Expiry time in days
+expiryPeriod = 30
+
+# cat=basic/enable; type=input; label=Number of blacklisted passwords
+blacklistLength = 5

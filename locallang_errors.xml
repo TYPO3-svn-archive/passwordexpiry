@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes" ?>
+<T3locallang>
+	<meta type="array">
+		<description>Labels for the Password Change screen</description>
+		<type>module</type>
+	</meta>
+	<data type="array">
+		<languageKey index="default" type="array">
+			<label index="error.expired">Your password has expired. You must set a new password using the form below.</label>
+			<label index="error.expired.title">Your password has expired</label>
+			<label index="error.expired.description">You must set a new password using the form below.</label>
+			<label index="error.pwmismatch">The passwords you entered did not match. Please try again.</label>
+			<label index="error.pwmismatch.title">The passwords you entered did not match.</label>
+			<label index="error.pwmismatch.description">Please try again.</label>
+			<label index="error.pwblacklisted">The password you entered is not allowed. You cannot use any of your last %d passwords.</label>
+			<label index="error.pwblacklisted.title">The password you entered is not allowed.</label>
+			<label index="error.pwblacklisted.description">You cannot use any of your last %d passwords.</label>
+		</languageKey>
+	</data>
+</T3locallang>

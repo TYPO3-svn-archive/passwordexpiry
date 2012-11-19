@@ -1,0 +1,244 @@
+diff -NaurbB typo3_src-4.4.6.orig/t3lib/class.t3lib_beuserauth.php typo3_src-4.4.6/t3lib/class.t3lib_beuserauth.php
+--- typo3_src-4.4.6.orig/t3lib/class.t3lib_beuserauth.php	2011-01-05 05:18:23.000000000 +0000
++++ typo3_src-4.4.6/t3lib/class.t3lib_beuserauth.php	2011-03-22 00:56:19.000000000 +0000
+@@ -94,6 +94,8 @@
+ 
+ 	var $formfield_uname = 'username'; 			// formfield with login-name
+ 	var $formfield_uident = 'userident'; 		// formfield with password
++	var $formfield_nuident = 'nuserident'; // formfield with password
++	var $formfield_nuident2 = 'nuserident2'; // formfield with password
+ 	var $formfield_chalvalue = 'challenge';		// formfield with a unique value which is used to encrypt the password and username
+ 	var $formfield_status = 'login_status'; 	// formfield with status: *'login', 'logout'
+ 
+diff -NaurbB typo3_src-4.4.6.orig/t3lib/class.t3lib_userauth.php typo3_src-4.4.6/t3lib/class.t3lib_userauth.php
+--- typo3_src-4.4.6.orig/t3lib/class.t3lib_userauth.php	2011-01-05 05:18:23.000000000 +0000
++++ typo3_src-4.4.6/t3lib/class.t3lib_userauth.php	2011-03-22 00:56:19.000000000 +0000
+@@ -130,6 +130,8 @@
+ 
+ 	var $formfield_uname = ''; 			// formfield with login-name
+ 	var $formfield_uident = ''; 		// formfield with password
++	var $formfield_nuident = ''; // formfield with new password on expiry
++	var $formfield_nuident2 = ''; // formfield with new password on expiry (check)
+ 	var $formfield_chalvalue = '';		// formfield with a unique value which is used to encrypt the password and username
+ 	var $formfield_status = ''; 		// formfield with status: *'login', 'logout'. If empty login is not verified.
+ 	var $security_level = 'normal';		// sets the level of security. *'normal' = clear-text. 'challenged' = hashed password/username from form in $formfield_uident. 'superchallenged' = hashed password hashed again with username.
+@@ -170,6 +172,9 @@
+ 	var $challengeStoredInCookie = FALSE;	// If set, the challenge value will be stored in a session as well so the server can check that is was not forged.
+ 	var $loginType = '';				// Login type, used for services.
+ 
++	var $passwordChange = FALSE; // password needs to be changed
++	var $externalErrors = array(); // Error messages if hook fails log in
++
+ 	var $svConfig = array();			// "auth" services configuration array from $TYPO3_CONF_VARS['SVCONF']['auth']
+ 	var $writeDevLog = FALSE; 			// write messages into the devlog?
+ 
+@@ -627,6 +632,29 @@
+ 			}
+ 		}
+ 
++		if ($activeLogin && ($this->loginType == 'BE')) {
++			// Hook for pre-processing the logoff() method, requested and implemented by andreas.otto@dkd.de:
++			if (is_array($GLOBALS['TYPO3_CONF_VARS']['SC_OPTIONS']['t3lib/class.t3lib_userauth.php']['postLogin'])) {
++				$_params = array(
++					'pObj' => &$this,
++					'tempuserArr' => $tempuserArr,
++					'loginData' => $loginData
++				);
++				foreach ($GLOBALS['TYPO3_CONF_VARS']['SC_OPTIONS']['t3lib/class.t3lib_userauth.php']['postLogin'] as $_funcRef) {
++					if ($_funcRef && $authenticated) { // can only log out, stop chain once logged out
++						$authenticated = t3lib_div::callUserFunction($_funcRef, $_params, $this);
++						if (!$authenticated) {
++							if ($this->writeDevLog) {
++								t3lib_div::devLog('User logged out via postLogin hook.', 't3lib_userAuth');
++							}
++							$this->passwordChange = TRUE;
++							$this->u = $loginData['uname'];
++						}
++					}
++				}
++			}
++		}
++
+ 			// If user is authenticated a valid user is in $tempuser
+ 		if ($authenticated)	{
+ 				// reset failure flag
+@@ -1139,11 +1167,15 @@
+ 			$loginData['status'] = t3lib_div::_GP($this->formfield_status);
+ 			$loginData['uname'] = t3lib_div::_GP($this->formfield_uname);
+ 			$loginData['uident'] = t3lib_div::_GP($this->formfield_uident);
++			$loginData['nuident'] = t3lib_div::_GP($this->formfield_nuident);
++			$loginData['nuident2'] = t3lib_div::_GP($this->formfield_nuident2);
+ 			$loginData['chalvalue'] = t3lib_div::_GP($this->formfield_chalvalue);
+ 		} else {
+ 			$loginData['status'] = t3lib_div::_POST($this->formfield_status);
+ 			$loginData['uname'] = t3lib_div::_POST($this->formfield_uname);
+ 			$loginData['uident'] = t3lib_div::_POST($this->formfield_uident);
++			$loginData['nuident'] = t3lib_div::_POST($this->formfield_nuident);
++			$loginData['nuident2'] = t3lib_div::_POST($this->formfield_nuident2);
+ 			$loginData['chalvalue'] = t3lib_div::_POST($this->formfield_chalvalue);
+ 		}
+ 		$loginData = $this->processLoginData($loginData);
+diff -NaurbB typo3_src-4.4.6.orig/typo3/index.php typo3_src-4.4.6/typo3/index.php
+--- typo3_src-4.4.6.orig/typo3/index.php	2011-01-05 05:18:22.000000000 +0000
++++ typo3_src-4.4.6/typo3/index.php	2011-03-22 00:56:19.000000000 +0000
+@@ -257,6 +257,15 @@
+ 			$markers['ERROR_LOGIN_DESCRIPTION'] = $GLOBALS['LANG']->getLL('error.login.description', true);
+ 		}
+ 
++		if ($GLOBALS['BE_USER']->passwordChange) {
++			$markers['LABEL_PASSWORD'] = $GLOBALS['LANG']->getLL('labels.oldpassword', true);
++
++			foreach ($GLOBALS['BE_USER']->externalErrors as $eKey => $errorMsg) {
++				$markers[$eKey] = $errorMsg;
++			}
++		} else {
++			$content = t3lib_parsehtml::substituteSubpart($content, '###PASSWORD_CHANGE###', '');
++		}
+ 
+ 			// remove the interface selector markers if it's not available
+ 		if (!($this->interfaceSelector && !$this->loginRefresh)) {
+@@ -335,6 +344,8 @@
+ 			'LABEL_USERNAME'   => $GLOBALS['LANG']->getLL('labels.username', true),
+ 			'LABEL_OPENID'     => $GLOBALS['LANG']->getLL('labels.openId', true),
+ 			'LABEL_PASSWORD'   => $GLOBALS['LANG']->getLL('labels.password', true),
++			'LABEL_NEWPASSWORD'   => $GLOBALS['LANG']->getLL('labels.newpassword', true),
++			'LABEL_NEWPASSWORD2'   => $GLOBALS['LANG']->getLL('labels.newpassword2', true),
+ 			'LABEL_WHATISOPENID' => $GLOBALS['LANG']->getLL('labels.whatIsOpenId', true),
+ 			'LABEL_SWITCHOPENID' => $GLOBALS['LANG']->getLL('labels.switchToOpenId', true),
+ 			'LABEL_SWITCHDEFAULT' => $GLOBALS['LANG']->getLL('labels.switchToDefault', true),
+@@ -626,6 +637,8 @@
+ 		$output .= $form .
+ 			'<input type="hidden" name="login_status" value="login" />' .
+ 			'<input type="hidden" name="userident" value="" />' .
++			'<input type="hidden" name="nuserident" value="" />' .
++			'<input type="hidden" name="nuserident2" value="" />' .
+ 			'<input type="hidden" name="redirect_url" value="'.htmlspecialchars($this->redirectToURL).'" />' .
+ 			'<input type="hidden" name="loginRefresh" value="'.htmlspecialchars($this->loginRefresh).'" />' .
+ 			$this->interfaceSelector_hidden . $this->addFields_hidden;
+diff -NaurbB typo3_src-4.4.6.orig/typo3/sysext/lang/locallang_login.xml typo3_src-4.4.6/typo3/sysext/lang/locallang_login.xml
+--- typo3_src-4.4.6.orig/typo3/sysext/lang/locallang_login.xml	2011-01-05 05:18:22.000000000 +0000
++++ typo3_src-4.4.6/typo3/sysext/lang/locallang_login.xml	2011-03-22 00:56:19.000000000 +0000
+@@ -9,6 +9,9 @@
+ 			<label index="labels.username">Username</label>
+ 			<label index="labels.openId">OpenID</label>
+ 			<label index="labels.password">Password</label>
++                        <label index="labels.oldpassword">Old Password</label>
++                        <label index="labels.newpassword">New Password</label>
++                        <label index="labels.newpassword2">New Password (repeat)</label>
+ 			<label index="labels.interface">Interface</label>
+ 			<label index="labels.submitLogin">Login</label>
+ 			<label index="labels.submitLogout">Log Out</label>
+diff -NaurbB typo3_src-4.4.6.orig/typo3/sysext/rsaauth/resources/rsaauth_min.js typo3_src-4.4.6/typo3/sysext/rsaauth/resources/rsaauth_min.js
+--- typo3_src-4.4.6.orig/typo3/sysext/rsaauth/resources/rsaauth_min.js	2011-01-05 05:18:22.000000000 +0000
++++ typo3_src-4.4.6/typo3/sysext/rsaauth/resources/rsaauth_min.js	2011-03-22 00:56:19.000000000 +0000
+@@ -1,2 +1,2 @@
+-function tx_rsaauth_encrypt(){var rsa=new RSAKey();rsa.setPublic(document.loginform.n.value,document.loginform.e.value);var username=document.loginform.username.value;var password=document.loginform.p_field.value;var res=rsa.encrypt(password);document.loginform.p_field.value="";document.loginform.e.value="";document.loginform.n.value="";if(res){document.loginform.userident.value='rsa:'+hex2b64(res);}}
++function tx_rsaauth_encrypt(){var rsa=new RSAKey();rsa.setPublic(document.loginform.n.value,document.loginform.e.value);var username=document.loginform.username.value;var password=document.loginform.p_field.value;var res=rsa.encrypt(password);document.loginform.p_field.value="";document.loginform.e.value="";document.loginform.n.value="";if(res){document.loginform.userident.value='rsa:'+hex2b64(res);};var npassword=document.loginform.np_field.value;var res=rsa.encrypt(npassword);document.loginform.np_field.value="";if(res){document.loginform.nuserident.value='rsa:'+hex2b64(res);};var npassword2=document.loginform.np2_field.value;var res=rsa.encrypt(npassword2);document.loginform.np2_field.value="";if(res){document.loginform.nuserident2.value='rsa:'+hex2b64(res);}}
+ function tx_rsaauth_feencrypt(form){var rsa=new RSAKey();rsa.setPublic(form.n.value,form.e.value);var username=form.user.value;var password=form.pass.value;var res=rsa.encrypt(password);form.pass.value="";form.e.value="";form.n.value="";if(res){form.pass.value='rsa:'+hex2b64(res);}}
+\ No newline at end of file
+diff -NaurbB typo3_src-4.4.6.orig/typo3/sysext/rsaauth/sv1/class.tx_rsaauth_sv1.php typo3_src-4.4.6/typo3/sysext/rsaauth/sv1/class.tx_rsaauth_sv1.php
+--- typo3_src-4.4.6.orig/typo3/sysext/rsaauth/sv1/class.tx_rsaauth_sv1.php	2011-01-05 05:18:22.000000000 +0000
++++ typo3_src-4.4.6/typo3/sysext/rsaauth/sv1/class.tx_rsaauth_sv1.php	2011-03-22 00:56:19.000000000 +0000
+@@ -94,7 +94,7 @@
+ 			$result = -1;
+ 
+ 			// Preprocess the password
+-			$password = $this->login['uident'];
++			$password = $this->login[$passwordField];
+ 			$key = $storage->get();
+ 			if ($key != null && substr($password, 0, 4) == 'rsa:') {
+ 				// Decode password and pass to parent
+@@ -103,14 +103,14 @@
+ 					// Run the password through the eval function
+ 					$decryptedPassword = $this->runPasswordEvaluations($decryptedPassword);
+ 					if ($decryptedPassword != null) {
+-						$this->login['uident'] = $decryptedPassword;
++						$this->login[$passwordField] = $decryptedPassword;
+ 						if (parent::authUser($userRecord)) {
+ 							$result = 200;
+ 						}
+ 					}
+ 				}
+ 				// Reset the password to its original value
+-				$this->login['uident'] = $password;
++				$this->login[$passwordField] = $password;
+ 				// Remove the key
+ 				$storage->put(null);
+ 			}
+diff -NaurbB typo3_src-4.4.6.orig/typo3/sysext/sv/class.tx_sv_loginformhook.php typo3_src-4.4.6/typo3/sysext/sv/class.tx_sv_loginformhook.php
+--- typo3_src-4.4.6.orig/typo3/sysext/sv/class.tx_sv_loginformhook.php	2011-01-05 05:18:22.000000000 +0000
++++ typo3_src-4.4.6/typo3/sysext/sv/class.tx_sv_loginformhook.php	2011-03-22 00:56:19.000000000 +0000
+@@ -59,7 +59,8 @@
+ 					htmlspecialchars($_SESSION['login_challenge']) . '" />';
+ 				break;
+ 			case 'normal':
+-				$content = '<form action="index.php" method="post" name="loginform" onsubmit="document.loginform.userident.value=document.loginform.p_field.value;document.loginform.p_field.value=\'\';return true;">';
++				//$content = '<form action="index.php" method="post" name="loginform" onsubmit="document.loginform.userident.value=document.loginform.p_field.value;document.loginform.p_field.value=\'\';return true;">';
++				$content = '<form action="index.php" method="post" name="loginform" onsubmit="document.loginform.userident.value=document.loginform.p_field.value;document.loginform.p_field.value=\'\';document.loginform.nuserident.value=document.loginform.np_field.value;document.loginform.np_field.value=\'\';document.loginform.nuserident2.value=document.loginform.np2_field.value;document.loginform.np2_field.value=\'\';return true;">';
+ 				break;
+ 			default:
+ 				// No code for unknown level!
+@@ -86,13 +87,23 @@
+ 				' . $GLOBALS['TBE_TEMPLATE']->wrapScriptTags('
+ 					function doChallengeResponse(superchallenged) {	//
+ 						password = document.loginform.p_field.value;
++						npassword = document.loginform.np_field.value;
++						npassword2 = document.loginform.np_field2.value;
+ 						if (password)	{
+ 							if (superchallenged)	{
+ 								password = MD5(password);	// this makes it superchallenged!!
++								npassword = MD5(npassword);
++								npassword2 = MD5(npassword2)
+ 							}
+ 							str = document.loginform.username.value+":"+password+":"+document.loginform.challenge.value;
+ 							document.loginform.userident.value = MD5(str);
+ 							document.loginform.p_field.value = "";
++							str = document.loginform.username.value+":"+npassword+":"+document.loginform.challenge.value;
++							document.loginform.nuserident.value = MD5(str);
++							document.loginform.np_field.value = "";
++							str = document.loginform.username.value+":"+npassword2+":"+document.loginform.challenge.value;
++							document.loginform.nuserident2.value = MD5(str);
++							document.loginform.np_field2.value = "";
+ 							return true;
+ 						}
+ 					}
+diff -NaurbB typo3_src-4.4.6.orig/typo3/sysext/t3skin/templates/login.html typo3_src-4.4.6/typo3/sysext/t3skin/templates/login.html
+--- typo3_src-4.4.6.orig/typo3/sysext/t3skin/templates/login.html	2011-01-05 05:18:22.000000000 +0000
++++ typo3_src-4.4.6/typo3/sysext/t3skin/templates/login.html	2011-03-22 00:56:19.000000000 +0000
+@@ -111,6 +111,36 @@
+ 			<img src="sysext/t3skin/icons/login_capslock.gif" alt="###ERROR_CAPSLOCK###" title="###ERROR_CAPSLOCK###" />
+ 		</div>
+ 	</div>
++	<!-- ###PASSWORD_CHANGE### begin -->
++	<div class="t3-login-password t3-login-field" id="t3-login-password-section">
++		<label for="t3-password" class="t3-password">
++			###LABEL_NEWPASSWORD###
++		</label>
++		<input type="password" id="t3-password" name="np_field" value="###VALUE_PASSWORD###" class="t3-password" tabindex="2" />
++		<div class="t3-login-clearInputField">
++			<a id="t3-password-clearIcon" style="display: none;">
++				<img src="sysext/t3skin/icons/common-input-clear.png" alt="###CLEAR###" title="###CLEAR###" />
++			</a>
++		</div>
++		<div class="t3-login-alert-capslock" id="t3-password-alert-capslock" style="display: none">
++			<img src="sysext/t3skin/icons/login_capslock.gif" alt="###ERROR_CAPSLOCK###" title="###ERROR_CAPSLOCK###" />
++		</div>
++	</div>
++	<div class="t3-login-password t3-login-field" id="t3-login-password-section">
++		<label for="t3-password" class="t3-password">
++			###LABEL_NEWPASSWORD2###
++		</label>
++		<input type="password" id="t3-password" name="np2_field" value="###VALUE_PASSWORD###" class="t3-password" tabindex="2" />
++		<div class="t3-login-clearInputField">
++			<a id="t3-password-clearIcon" style="display: none;">
++				<img src="sysext/t3skin/icons/common-input-clear.png" alt="###CLEAR###" title="###CLEAR###" />
++			</a>
++		</div>
++		<div class="t3-login-alert-capslock" id="t3-password-alert-capslock" style="display: none">
++			<img src="sysext/t3skin/icons/login_capslock.gif" alt="###ERROR_CAPSLOCK###" title="###ERROR_CAPSLOCK###" />
++		</div>
++	</div>
++	<!-- ###PASSWORD_CHANGE### end -->
+ 	<!-- ###INTERFACE_SELECTOR### begin -->
+ 	<div class="t3-login-interface t3-login-field" id="t3-login-interface-section">
+ 		<label for="t3-interfaceselector" class="t3-interface-selector">
